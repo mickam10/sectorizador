@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="es-PE">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sectorizador nocturno</title>
+  <meta name="description" content="Sube los pedidos del día y arma en vivo las zonas y rutas de la noche en Lima.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="css/estilos.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2l12 7v14l-12 7-12-7V9z' fill='%2314324f'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="barra">
+    <span class="marca"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2l12 7v14l-12 7-12-7V9z"/></svg>Sectorizador nocturno</span>
+  </header>
+
+  <main>
+    <!-- 1. Cargar -->
+    <section id="pantalla-cargar" class="pantalla">
+      <div class="centro">
+        <h1>Pedidos para entregar mañana</h1>
+        <p class="sub">Sube el Excel de pedidos del día. El algoritmo arma las zonas y rutas de la noche.</p>
+
+        <label id="zona-archivo" class="zona-archivo" tabindex="0">
+          <input id="entrada-archivo" type="file" accept=".xlsx,.xls,.csv" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0l-5 5m5-5l5 5M4 20h16"/></svg>
+          <span class="zona-titulo">Arrastra aquí el archivo o <u>elígelo</u></span>
+          <span class="zona-nota">Excel (.xlsx, .xls) o CSV</span>
+        </label>
+
+        <div id="confirmacion" class="confirmacion" hidden>
+          <span class="archivo-nombre" id="archivo-nombre"></span>
+          <span id="archivo-resumen"></span>
+        </div>
+        <div id="error-carga" class="alerta" role="alert" hidden></div>
+
+        <button id="boton-sectorizar" class="boton-principal" disabled>Sectorizar</button>
+      </div>
+    </section>
+
+    <!-- 2. Sectorizar -->
+    <section id="pantalla-sectorizar" class="pantalla" hidden>
+      <div class="centro">
+        <h1>Sectorizando</h1>
+        <div class="cronometro"><span id="cronometro">…</span></div>
+        <p class="sub">tiempo real de cómputo</p>
+        <ol class="etapas" id="etapas">
+          <li>Cada pedido a su hexágono y su bolsa.</li>
+          <li>Satélites unidos a núcleos o entre vecinos.</li>
+          <li>Bordes ajustados a rutas de 40 a 55 paradas.</li>
+          <li>Turno de cada pedido según su ola.</li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- 3. Resultado -->
+    <section id="pantalla-resultado" class="pantalla resultado" hidden>
+      <div class="mapa-caja">
+        <div id="mapa" class="mapa"></div>
+        <div class="controles-mapa">
+          <div class="segmentado" role="group" aria-label="Regla">
+            <button data-modo="actual">Regla actual</button>
+            <button data-modo="propuesta" class="activo">Propuesta</button>
+          </div>
+          <div class="segmentado" role="group" aria-label="Ruta">
+            <button data-turno="1" class="activo">Ruta 1</button>
+            <button data-turno="2">Ruta 2</button>
+          </div>
+        </div>
+        <div class="leyenda" id="leyenda"></div>
+      </div>
+
+      <aside class="panel">
+        <div class="titulo-resultado">
+          <h2 id="titulo-dia">Resultado</h2>
+          <p id="tiempo-algoritmo" class="tiempo"></p>
+        </div>
+
+        <table class="metricas">
+          <thead><tr><th></th><th>Regla actual</th><th class="prop">Propuesta</th></tr></thead>
+          <tbody id="tabla-metricas"></tbody>
+        </table>
+
+        <div class="pestanas" role="tablist">
+          <button role="tab" data-pestana="ubicaciones" class="activo">Ubicaciones del hub</button>
+          <button role="tab" data-pestana="etiqueta">Etiqueta</button>
+          <button role="tab" data-pestana="descargar">Descargar</button>
+        </div>
+
+        <div id="pestana-ubicaciones" class="pestana">
+          <p class="resumen-r1" id="resumen-r1"></p>
+          <p class="nota-leyenda"><span class="muestra solida"></span>ya en el hub (olas 14:00 y 19:00) <span class="muestra clara"></span>por llegar (ola 02:30)</p>
+          <div class="ubicaciones" id="ubicaciones"></div>
+        </div>
+
+        <div id="pestana-etiqueta" class="pestana" hidden>
+          <div id="etiqueta"></div>
+        </div>
+
+        <div id="pestana-descargar" class="pestana" hidden>
+          <p>Un renglón por pedido, con bolsa, ubicación, turno, franja, ruta y orden en la ruta. Es lo que recibe el sistema que imprime la segunda etiqueta del hub.</p>
+          <button id="boton-descargar" class="boton-principal">Descargar archivo para el hub</button>
+          <p class="archivo-nombre" id="nombre-descarga"></p>
+        </div>
+
+        <button id="boton-otro" class="boton-secundario">Cargar otro archivo</button>
+      </aside>
+    </section>
+  </main>
+
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

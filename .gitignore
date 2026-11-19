@@ -1,0 +1,14 @@
+# Lista cerrada: solo se publica lo que la página necesita para funcionar.
+# Todo lo demás (pedidos de prueba, referencia, pruebas, documentos internos) se queda en esta computadora.
+/*
+!/.gitignore
+!/.nojekyll
+!/index.html
+!/css/
+!/js/
+!/datos/
+/datos/*
+!/datos/bolsas.json
+!/datos/mapas/
+/datos/mapas/*
+!/datos/mapas/distritos_simplificado.geojson
