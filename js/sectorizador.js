@@ -157,7 +157,9 @@ export function prepararMalla(B, distancias) {
     return calle[b][c] > DESVIO_RATIO * recta && calle[b][c] > recta + DESVIO_EXTRA_KM;
   };
   const vecinas = vec.map((s, b) => [...s].filter(c => !bloqueada(b, c)).sort((a, c) => a - c));
-  const M = { B, KX, KY, LADO, U, esNucleo, pareja, hex2bolsa, hexKeys, hexC, vecinas, cen0, calle, ladoRio, distancias };
+  // todos los pares bloqueados (no solo los que se tocan), para revisar TODOS los pares de una zona
+  const bloq = U.map((_, b) => U.map((__, c) => bloqueada(b, c)));
+  const M = { B, KX, KY, LADO, U, esNucleo, pareja, hex2bolsa, hexKeys, hexC, vecinas, cen0, calle, ladoRio, bloq, distancias };
   cacheMalla.set(B, M);
   return M;
 }
@@ -444,6 +446,8 @@ function menorTupla(a, b) {
 }
 
 function zonas(M, us, X) {
+  // s puede entrar a la zona z solo si no está bloqueada con NINGUNA de sus bolsas (no solo con la que toca)
+  const compatible = (s, z) => !z.some(u => M.bloq[s][u]);
   const cnt = new Map(), suma = new Map();
   for (let i = 0; i < us.length; i++) {
     const b = us[i];
@@ -476,7 +480,7 @@ function zonas(M, us, X) {
         for (const s of V.get(u)) {
           if (zonaDe.has(s) || M.esNucleo[s]) continue;
           const d = dist(cen.get(s), cz[i]);
-          if (d <= RADIO_KM && carga[i] + C(s) <= TOPE_ZONA && (mejor === null || menorTupla([d, i, s], mejor))) mejor = [d, i, s];
+          if (d <= RADIO_KM && carga[i] + C(s) <= TOPE_ZONA && compatible(s, zs[i]) && (mejor === null || menorTupla([d, i, s], mejor))) mejor = [d, i, s];
         }
       }
     }
@@ -498,7 +502,7 @@ function zonas(M, us, X) {
         .map(s => [dist(cen.get(s), c0), s])
         .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]))
         .map(a => a[1])
-        .filter(s => c + C(s) <= TOPE_ZONA && diametro(M, [...z, s]) <= DMAX_ZONA_KM);
+        .filter(s => c + C(s) <= TOPE_ZONA && diametro(M, [...z, s]) <= DMAX_ZONA_KM && compatible(s, z));
       if (!cand.length) break;
       const s = cand[0];
       z.push(s); zonaDe.set(s, zs.length); c += C(s);
@@ -519,6 +523,7 @@ function zonas(M, us, X) {
         for (const j of js) {
           const z2 = zs[j];
           if (!z2.some(u => M.esNucleo[u]) && diametro(M, [...z2, s]) > DMAX_ZONA_KM) continue;
+          if (!compatible(s, z2)) continue;
           const g = desvio(T[i]) + desvio(T[j]) - desvio(T[i] - C(s)) - desvio(T[j] + C(s));
           if (g > 0.5 && (mejor === null || g > mejor[0]) && continua(z.filter(u => u !== s), V)) mejor = [g, i, j, s];
         }
