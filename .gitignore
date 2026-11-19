@@ -6,6 +6,7 @@
 !/index.html
 !/css/
 !/js/
+!/js/vendor/
 !/datos/
 /datos/*
 !/datos/bolsas.json

@@ -44,6 +44,7 @@ async function leerArchivo(archivo) {
   limpiarCarga();
   if (!archivo) return;
   if (!/\.(xlsx|xls|csv)$/i.test(archivo.name)) return mostrarError(MSG_ILEGIBLE);
+  if (typeof XLSX === 'undefined') return mostrarError('No se cargó el lector de Excel. Revisa la conexión a internet y recarga la página.');
   let filas;
   try {
     const buf = await archivo.arrayBuffer();
@@ -125,7 +126,7 @@ $('boton-sectorizar').addEventListener('click', async () => {
 
 // ---------------- 3. resultado ----------------
 let mapa = null;
-const vista = { modo: 'propuesta', turno: 1, pestana: 'ubicaciones' };
+const vista = { modo: 'propuesta', turno: 1, pestana: 'ubicaciones', comparar: false };
 const nombreDistrito = new Map();     // clave de los pedidos (SANTIAGODESURCO) → "Santiago de Surco"
 const cargaDistritos = fetch('datos/mapas/distritos_simplificado.geojson')
   .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
@@ -139,6 +140,7 @@ async function mostrarResultado(R) {
   const fecha = D.fechaEntrega ? `${D.fechaEntrega.getDate()} de ${MESES[D.fechaEntrega.getMonth()]}` : 'Pedidos del día';
   $('titulo-dia').textContent = `${fecha} · ${fmt(r.pedidos)} pedidos`;
   $('tiempo-algoritmo').innerHTML = `Sectorizado en <strong>${R.segundos.toFixed(2)} s</strong> · ${r.zonas} zonas de la noche`;
+  vista.comparar = false; $('comparar').checked = false; $('selector-regla').hidden = true;   // cada archivo nuevo parte solo con la propuesta
   pintarMetricas(r);
   pintarUbicaciones(R);
   estado.seleccion = null;
@@ -156,18 +158,37 @@ async function mostrarResultado(R) {
   actualizarMapa();
 }
 
+// diferencias "propuesta − regla actual", con signo menos tipográfico
+const conSigno = n => (n > 0 ? '+' : n < 0 ? '−' : '') + fmt(Math.abs(n));
+const aMin = hhmm => { const [h, m] = hhmm.split(':').map(Number); return (h < 12 ? h + 24 : h) * 60 + m; };   // 02:50 → 26:50
+function difHora(actual, prop) {
+  const d = aMin(actual) - aMin(prop);
+  if (d === 0) return 'igual';
+  const a = Math.abs(d), txt = (a >= 60 ? Math.floor(a / 60) + ' h ' : '') + (a % 60 ? (a % 60) + ' min' : '');
+  return txt.trim() + (d > 0 ? ' antes' : ' después');
+}
+
+/** Métricas: por defecto solo la propuesta; con "Comparar con la regla actual", las dos y la diferencia. */
 function pintarMetricas(r) {
-  const A = r.regla_actual, P = r.propuesta;
+  const A = r.regla_actual, P = r.propuesta, comparar = vista.comparar;
   const reparto = m => `<span class="nota reparto">${fmt(m.ruta1)} · ${fmt(m.ruta2)} · ${fmt(m.ruta3)}</span>`;
+  const pctKm = A.km ? `<span class="nota">${conSigno(Math.round((P.km - A.km) / A.km * 100))} %</span>` : '';
   const filas = [
-    ['Rutas<span class="nota">Ruta 1 · Ruta 2 · Ruta 3</span>', fmt(A.rutas) + reparto(A), fmt(P.rutas) + reparto(P)],
-    ['Paradas por ruta', A.paradas_prom.toFixed(1), P.paradas_prom.toFixed(1)],
-    ['Rutas desparejas<span class="nota">menos de 40 o más de 55</span>', A.desparejas_pct + ' %', P.desparejas_pct + ' %'],
-    ['Km recorridos<span class="nota">en línea recta</span>', fmt(A.km), fmt(P.km)],
-    ['Direcciones con dos motos', fmt(A.direcciones_con_2_motos), fmt(P.direcciones_con_2_motos)],
-    ['Ruta 1 clasificada<span class="nota">estimado a 700 pedidos por hora</span>', r.ruta1_lista_regla_actual + '<span class="nota">estimado</span>', r.ruta1_lista_propuesta],
+    ['Rutas<span class="nota">Ruta 1 · Ruta 2 · Ruta 3</span>', fmt(A.rutas) + reparto(A), fmt(P.rutas) + reparto(P), conSigno(P.rutas - A.rutas)],
+    ['Paradas por ruta', A.paradas_prom.toFixed(1), P.paradas_prom.toFixed(1), ''],
+    ['Rutas desparejas<span class="nota">menos de 40 o más de 55</span>', A.desparejas_pct + ' %', P.desparejas_pct + ' %', ''],
+    ['Km recorridos<span class="nota">en línea recta</span>', fmt(A.km), fmt(P.km), conSigno(P.km - A.km) + pctKm],
+    ['Direcciones con dos motos', fmt(A.direcciones_con_2_motos), fmt(P.direcciones_con_2_motos), conSigno(P.direcciones_con_2_motos - A.direcciones_con_2_motos)],
+    ['Ruta 1 clasificada<span class="nota">estimado a 700 pedidos por hora</span>', r.ruta1_lista_regla_actual + '<span class="nota">estimado</span>', r.ruta1_lista_propuesta, difHora(r.ruta1_lista_regla_actual, r.ruta1_lista_propuesta)],
   ];
-  $('tabla-metricas').innerHTML = filas.map(([n, a, p]) => `<tr><td>${n}</td><td>${a}</td><td class="prop">${p}</td></tr>`).join('');
+  document.querySelector('.metricas').classList.toggle('solo-propuesta', !comparar);
+  document.querySelector('.metricas').classList.toggle('comparando', comparar);
+  $('cabecera-metricas').innerHTML = comparar
+    ? '<tr><th></th><th>Regla actual</th><th class="prop">Propuesta</th><th>Diferencia</th></tr>'
+    : '<tr><th></th><th class="prop">Propuesta</th></tr>';
+  $('tabla-metricas').innerHTML = filas.map(([n, a, p, d]) => comparar
+    ? `<tr><td>${n}</td><td>${a}</td><td class="prop">${p}</td><td class="dif">${d}</td></tr>`
+    : `<tr><td>${n}</td><td class="prop">${p}</td></tr>`).join('');
 }
 
 function pintarUbicaciones(R) {
@@ -258,12 +279,24 @@ function actualizarMapa() {
     ? `<span class="fila"><span class="linea-nucleo"></span>Núcleo (N1 a N9)</span>
        <span class="fila"><span class="linea-satelite"></span>Satélite</span>
        <span class="fila"><span class="punto"></span>Pedido, del color de su ruta</span>
-       <span>Relleno: zona de la noche</span>`
-    : `<span class="fila"><span class="punto"></span>Pedido, del color de su ruta</span>
-       <span>Primeros 50 pedidos de cada distrito</span>`;
+       <span>Relleno: zona de la noche</span>
+       <span class="nota-simulados">Pedidos simulados (mock de Falabella, octubre 2026)</span>`
+    : `<span><b>Regla actual</b> (para comparar)</span>
+       <span class="fila"><span class="punto"></span>Pedido, del color de su ruta</span>
+       <span>Primeros 50 pedidos de cada distrito</span>
+       <span class="nota-simulados">Pedidos simulados (mock de Falabella, octubre 2026)</span>`;
 }
 
 document.querySelectorAll('[data-modo]').forEach(b => b.addEventListener('click', () => { vista.modo = b.dataset.modo; actualizarMapa(); }));
+
+// "Comparar con la regla actual": apagado por defecto. Al activarlo, el mapa muestra la regla actual
+// (con el selector para volver a la propuesta) y las métricas agregan la regla actual y la diferencia.
+$('comparar').addEventListener('change', e => {
+  vista.comparar = e.target.checked;
+  $('selector-regla').hidden = !vista.comparar;
+  vista.modo = vista.comparar ? 'actual' : 'propuesta';
+  if (estado.resultado) { pintarMetricas(estado.resultado.resumen); actualizarMapa(); }
+});
 document.querySelectorAll('[data-turno]').forEach(b => b.addEventListener('click', () => { vista.turno = +b.dataset.turno; actualizarMapa(); }));
 
 function cambiarPestana(p) {

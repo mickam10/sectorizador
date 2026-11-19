@@ -61,7 +61,8 @@
       <div class="mapa-caja">
         <div id="mapa" class="mapa"></div>
         <div class="controles-mapa">
-          <div class="segmentado" role="group" aria-label="Regla">
+          <!-- solo aparece con "Comparar con la regla actual" -->
+          <div class="segmentado" role="group" aria-label="Regla" id="selector-regla" hidden>
             <button data-modo="actual">Regla actual</button>
             <button data-modo="propuesta" class="activo">Propuesta</button>
           </div>
@@ -76,14 +77,21 @@
 
       <aside class="panel">
         <div class="titulo-resultado">
+          <p class="antetitulo">Zonas de la corrida de las 00:05</p>
           <h2 id="titulo-dia">Resultado</h2>
           <p id="tiempo-algoritmo" class="tiempo"></p>
         </div>
 
         <table class="metricas">
-          <thead><tr><th></th><th>Regla actual</th><th class="prop">Propuesta</th></tr></thead>
+          <thead id="cabecera-metricas"></thead>
           <tbody id="tabla-metricas"></tbody>
         </table>
+
+        <label class="interruptor">
+          <input type="checkbox" id="comparar">
+          <span class="pista" aria-hidden="true"></span>
+          Comparar con la regla actual
+        </label>
 
         <div class="pestanas" role="tablist">
           <button role="tab" data-pestana="ubicaciones" class="activo">Ubicaciones del hub</button>
@@ -115,6 +123,8 @@
   </main>
 
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <!-- respaldo: si el CDN de SheetJS falla, se usa la copia local de la misma versión -->
+  <script>window.XLSX || document.write('<script src="js/vendor/xlsx-0.20.3.full.min.js"><\/script>');</script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>
