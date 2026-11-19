@@ -10,7 +10,9 @@ export const TOPE_ZONA = 108;
 export const META_ZONA = 100;
 export const RADIO_KM = 4.0;
 export const ALCANCE_AJUSTE_KM = 3.0;
-export const DMAX_ZONA_KM = 10.0;
+export const DMAX_ZONA_KM = 14.0;     // por calle
+export const DESVIO_RATIO = 2.0;      // rodeo: por calle más del doble de la línea recta...
+export const DESVIO_EXTRA_KM = 3.0;   // ...y más de 3 km extra => las bolsas no son vecinas
 export const SALTO_VACIO_KM = 3.0;   // una bolsa sin pedidos hoy no corta la vecindad: se atraviesa hasta 3 km
 export const CUOTA_OLAS = [0.15, 0.25, 0.60];
 export const VEL_HUB = 700;
@@ -109,9 +111,16 @@ function aHora(v) {
 // ---------------- mapa de bolsas ----------------
 const cacheMalla = new WeakMap();
 
-/** Prepara las estructuras del mapa de bolsas (se calcula una vez por objeto bolsas). */
-export function prepararMalla(B) {
-  if (cacheMalla.has(B)) return cacheMalla.get(B);
+/**
+ * Prepara las estructuras del mapa de bolsas (se calcula una vez por objeto bolsas y distancias).
+ * distancias: datos/distancias_calle.json (matriz km N×N, OpenStreetMap).
+ */
+export function prepararMalla(B, distancias) {
+  const previo = cacheMalla.get(B);
+  if (previo && previo.distancias === distancias) return previo;
+  const nb = B.bolsas.length;
+  if (!distancias || !Array.isArray(distancias.km) || distancias.km.length !== nb || distancias.km.some(f => !Array.isArray(f) || f.length !== nb))
+    throw new Error('Falta datos/distancias_calle.json o no corresponde a datos/bolsas.json');
   const KX = B.proyeccion.kx, KY = B.proyeccion.ky, LADO = B.malla.lado_km;
   const U = B.bolsas;
   const esNucleo = U.map(u => u.tipo === 'nucleo');
@@ -133,12 +142,22 @@ export function prepararMalla(B) {
       if (c !== undefined && c !== b) vec[b].add(c);
     }
   }
-  const vecinas = vec.map(s => [...s].sort((a, b) => a - b));
-  // centro fijo de cada bolsa (promedio de sus hexágonos): sirve para cruzar bolsas vacías
+  // centro fijo de cada bolsa (promedio de sus hexágonos): sirve para cruzar bolsas vacías y medir la línea recta
   const cen0 = U.map(() => [0, 0]), nh = U.map(() => 0);
   hexKeys.forEach(([q, r], k) => { const b = hex2bolsa.get(q + ',' + r); cen0[b][0] += hexC[k][0]; cen0[b][1] += hexC[k][1]; nh[b]++; });
   cen0.forEach((c, b) => { const n = Math.max(nh[b], 1); c[0] /= n; c[1] /= n; });
-  const M = { B, KX, KY, LADO, U, esNucleo, pareja, hex2bolsa, hexKeys, hexC, vecinas, cen0 };
+  // distancias por calle, promedio de ida y vuelta: CALLE[a][b] = (km[a][b] + km[b][a]) / 2
+  const km = distancias.km.map(f => f.map(v => (v === null || v === undefined) ? NaN : Number(v)));
+  const calle = km.map((f, a) => f.map((v, b) => (v + km[b][a]) / 2));
+  // el río Rímac es una barrera ('N' y 'S'; null no tiene restricción) y un rodeo por calle corta la vecindad
+  const ladoRio = U.map(u => u.lado_rio ?? null);
+  const bloqueada = (b, c) => {
+    if (ladoRio[b] && ladoRio[c] && ladoRio[b] !== ladoRio[c]) return true;
+    const recta = hyp(cen0[b][0] - cen0[c][0], cen0[b][1] - cen0[c][1]);
+    return calle[b][c] > DESVIO_RATIO * recta && calle[b][c] > recta + DESVIO_EXTRA_KM;
+  };
+  const vecinas = vec.map((s, b) => [...s].filter(c => !bloqueada(b, c)).sort((a, c) => a - c));
+  const M = { B, KX, KY, LADO, U, esNucleo, pareja, hex2bolsa, hexKeys, hexC, vecinas, cen0, calle, ladoRio, distancias };
   cacheMalla.set(B, M);
   return M;
 }
@@ -378,14 +397,11 @@ function media(pts) {
 }
 
 // ---------------- 5a. zonas de la noche ----------------
-/** Distancia máxima entre los centroides de un grupo de bolsas (km). */
-function diametro(ids, cen) {
-  let d = 0;
-  for (let a = 0; a < ids.length; a++) for (let b = 0; b < ids.length; b++) {
-    const p = cen.get(ids[a]), q = cen.get(ids[b]);
-    const v = hyp(p[0] - q[0], p[1] - q[1]);
-    if (v > d) d = v;
-  }
+/** Distancia POR CALLE más larga entre dos bolsas del grupo (centro a centro, OpenStreetMap). */
+function diametro(M, ids) {
+  if (ids.length < 2) return 0;
+  let d = -Infinity;
+  for (const a of ids) for (const c of ids) if (M.calle[a][c] > d) d = M.calle[a][c];
   return d;
 }
 
@@ -482,7 +498,7 @@ function zonas(M, us, X) {
         .map(s => [dist(cen.get(s), c0), s])
         .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]))
         .map(a => a[1])
-        .filter(s => c + C(s) <= TOPE_ZONA && diametro([...z, s], cen) <= DMAX_ZONA_KM);
+        .filter(s => c + C(s) <= TOPE_ZONA && diametro(M, [...z, s]) <= DMAX_ZONA_KM);
       if (!cand.length) break;
       const s = cand[0];
       z.push(s); zonaDe.set(s, zs.length); c += C(s);
@@ -502,7 +518,7 @@ function zonas(M, us, X) {
         const js = [...new Set([...V.get(s)].map(v => zonaDe.get(v)))].filter(j => j !== i).sort((a, b) => a - b);
         for (const j of js) {
           const z2 = zs[j];
-          if (!z2.some(u => M.esNucleo[u]) && diametro([...z2, s], cen) > DMAX_ZONA_KM) continue;
+          if (!z2.some(u => M.esNucleo[u]) && diametro(M, [...z2, s]) > DMAX_ZONA_KM) continue;
           const g = desvio(T[i]) + desvio(T[j]) - desvio(T[i] - C(s)) - desvio(T[j] + C(s));
           if (g > 0.5 && (mejor === null || g > mejor[0]) && continua(z.filter(u => u !== s), V)) mejor = [g, i, j, s];
         }
@@ -608,11 +624,12 @@ const ahora = () => (typeof performance !== 'undefined' ? performance.now() : Da
 
 /**
  * Corrida completa de la noche. filas: arreglo de objetos (una fila por pedido). B: datos/bolsas.json.
+ * distancias: datos/distancias_calle.json (distancias por calle entre bolsas, OpenStreetMap).
  * Devuelve { resumen (mismas claves que resultados_esperados.json), y el detalle para dibujar }.
  */
-export function sectorizar(filas, B, archivo = '') {
+export function sectorizar(filas, B, archivo = '', distancias = null) {
   const t0 = ahora();
-  const M = prepararMalla(B);
+  const M = prepararMalla(B, distancias);
   const D = leer(filas, B);
   const { X, us } = bolsasDe(M, D);
   const hoy = reglaActual(D);

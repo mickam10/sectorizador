@@ -11,6 +11,7 @@
 /datos/*
 !/datos/bolsas.json
 !/datos/conexion_bolsas.json
+!/datos/distancias_calle.json
 !/datos/mapas/
 /datos/mapas/*
 !/datos/mapas/distritos_simplificado.geojson

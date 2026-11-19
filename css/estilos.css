@@ -43,6 +43,10 @@ body {
 .marca svg { width: 22px; height: 22px; fill: #fff; }
 
 main { flex: 1; display: flex; flex-direction: column; }
+.pie {
+  height: 26px; flex: none; display: flex; align-items: center; padding: 0 16px;
+  font-size: 12px; color: var(--texto-suave); background: var(--superficie); border-top: 1px solid var(--borde);
+}
 .pantalla { flex: 1; display: flex; flex-direction: column; }
 .centro {
   width: 100%;
@@ -136,7 +140,7 @@ button:focus-visible { outline: 3px solid #6c9bd0; outline-offset: 2px; }
   grid-template-columns: minmax(0, 1fr) 480px;
   grid-template-rows: minmax(0, 1fr);
   flex: none;
-  height: calc(100vh - 48px);
+  height: calc(100vh - 48px - 26px);   /* barra superior y pie */
   min-height: 560px;
 }
 .mapa-caja { position: relative; min-height: 0; }
