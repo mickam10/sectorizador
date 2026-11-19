@@ -154,8 +154,10 @@ export class Mapa {
     // CARTO "light" ahora pide clave (sus teselas salen con "API KEY REQUIRED"); se usa OpenStreetMap
     // con un filtro gris claro (css: .fondo-calles). Si no carga, el mapa sigue con los distritos.
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors', maxZoom: 19, className: 'fondo-calles',
+      attribution: '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a>',
+      maxZoom: 19, className: 'fondo-calles',
     }).addTo(this.map);
+    this.map.attributionControl.setPrefix(false);   // sin "Leaflet"; la atribución de OpenStreetMap la exige su licencia
     this.map.createPane('hexes').style.zIndex = 350;
     this.map.createPane('distritos').style.zIndex = 380;
     this.map.createPane('bordes').style.zIndex = 390;

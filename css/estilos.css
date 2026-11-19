@@ -141,6 +141,9 @@ button:focus-visible { outline: 3px solid #6c9bd0; outline-offset: 2px; }
 .mapa-caja { position: relative; min-height: 0; }
 .mapa { position: absolute; inset: 0; background: #eef1f4; }
 .fondo-calles { filter: grayscale(1) brightness(1.12) contrast(.78); }
+/* atribución de OpenStreetMap: obligatoria por licencia, pero chica y tenue */
+.leaflet-container .leaflet-control-attribution { font-size: 10px; background: rgba(255, 255, 255, .55); color: #8a96a3; padding: 0 5px; }
+.leaflet-container .leaflet-control-attribution a { color: #8a96a3; text-decoration: none; }
 .controles-mapa {
   position: absolute; top: 12px; left: 56px; z-index: 1000;
   display: flex; flex-wrap: wrap; gap: 10px;
