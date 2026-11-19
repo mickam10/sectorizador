@@ -13,10 +13,6 @@ const estado = { bolsas: null, filas: null, archivo: '', resultado: null };
 const cargaBolsas = fetch('datos/bolsas.json')
   .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
   .then(b => { estado.bolsas = b; return b; });
-const cargaConexion = fetch('datos/conexion_bolsas.json')      // qué pares de bolsas se conectan por tierra
-  .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
-  .then(c => { estado.conexion = c; return c; });
-
 // ---------------- pantallas ----------------
 function mostrar(nombre) {
   for (const p of ['cargar', 'sectorizar', 'resultado']) $('pantalla-' + p).hidden = p !== nombre;
@@ -66,7 +62,7 @@ async function leerArchivo(archivo) {
     return mostrarError(e instanceof ErrorUsuario ? e.message : MSG_ILEGIBLE);
   }
   let bolsas;
-  try { bolsas = await cargaBolsas; await cargaConexion; }
+  try { bolsas = await cargaBolsas; }
   catch (e) { return mostrarError('No se pudo cargar el mapa de bolsas. Revisa la conexión y recarga la página.'); }
   try {
     const D = leer(filas, bolsas);         // valida y cuenta olas
@@ -111,7 +107,7 @@ $('boton-sectorizar').addEventListener('click', async () => {
 
   let R;
   try {
-    R = sectorizar(estado.filas, estado.bolsas, estado.archivo, estado.conexion);
+    R = sectorizar(estado.filas, estado.bolsas, estado.archivo);
   } catch (e) {
     if (!(e instanceof ErrorUsuario)) console.error(e);
     mostrar('cargar');

@@ -11,6 +11,7 @@ export const META_ZONA = 100;
 export const RADIO_KM = 4.0;
 export const ALCANCE_AJUSTE_KM = 3.0;
 export const DMAX_ZONA_KM = 10.0;
+export const SALTO_VACIO_KM = 3.0;   // una bolsa sin pedidos hoy no corta la vecindad: se atraviesa hasta 3 km
 export const CUOTA_OLAS = [0.15, 0.25, 0.60];
 export const VEL_HUB = 700;
 export const FRANJAS = { 1: '06:00 a 11:00', 2: '12:00 a 17:00', 3: '18:00 a 21:00' };
@@ -123,7 +124,21 @@ export function prepararMalla(B) {
     hex2bolsa.set(k, b);
   }
   const hexC = hexKeys.map(([q, r]) => [LADO * Math.sqrt(3) * (q + r / 2), LADO * 1.5 * r]);
-  const M = { B, KX, KY, LADO, U, esNucleo, pareja, hex2bolsa, hexKeys, hexC };
+  // vecindad fija: dos bolsas son vecinas si algún hexágono de una toca a uno de la otra (lista en orden de id)
+  const vec = U.map(() => new Set());
+  for (const [q, r] of hexKeys) {
+    const b = hex2bolsa.get(q + ',' + r);
+    for (const [dq, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, -1], [-1, 1]]) {
+      const c = hex2bolsa.get((q + dq) + ',' + (r + dr));
+      if (c !== undefined && c !== b) vec[b].add(c);
+    }
+  }
+  const vecinas = vec.map(s => [...s].sort((a, b) => a - b));
+  // centro fijo de cada bolsa (promedio de sus hexágonos): sirve para cruzar bolsas vacías
+  const cen0 = U.map(() => [0, 0]), nh = U.map(() => 0);
+  hexKeys.forEach(([q, r], k) => { const b = hex2bolsa.get(q + ',' + r); cen0[b][0] += hexC[k][0]; cen0[b][1] += hexC[k][1]; nh[b]++; });
+  cen0.forEach((c, b) => { const n = Math.max(nh[b], 1); c[0] /= n; c[1] /= n; });
+  const M = { B, KX, KY, LADO, U, esNucleo, pareja, hex2bolsa, hexKeys, hexC, vecinas, cen0 };
   cacheMalla.set(B, M);
   return M;
 }
@@ -374,8 +389,45 @@ function diametro(ids, cen) {
   return d;
 }
 
-function zonas(M, us, X, tierra) {
-  const porTierra = (a, ids) => ids.every(u => tierra[a][u] === '1');
+/** Vecinas con pedidos hoy: recorrido en anchura por la vecindad fija; las bolsas vacías se cruzan hasta 3 km. */
+function vecinasHoy(M, cnt) {
+  const V = new Map();
+  for (const b of cnt.keys()) {
+    const out = new Set(), vis = new Set([b]), cola = [b];
+    let ini = 0;                                 // cola: se saca siempre del inicio
+    while (ini < cola.length) {
+      const u = cola[ini++];
+      for (const v of M.vecinas[u]) {            // vecinas en orden de id
+        if (vis.has(v)) continue;
+        vis.add(v);
+        if (cnt.has(v)) out.add(v);
+        else if (hyp(M.cen0[v][0] - M.cen0[b][0], M.cen0[v][1] - M.cen0[b][1]) <= SALTO_VACIO_KM) cola.push(v);
+      }
+    }
+    V.set(b, out);
+  }
+  return V;
+}
+
+/** ¿Las bolsas de z quedan conectadas por vecinas de hoy? */
+function continua(z, V) {
+  const zz = new Set(z);
+  if (zz.size <= 1) return true;
+  const ini = Math.min(...zz), vis = new Set([ini]), pila = [ini];
+  while (pila.length) {
+    const u = pila.pop();
+    for (const v of V.get(u)) if (zz.has(v) && !vis.has(v)) { vis.add(v); pila.push(v); }
+  }
+  return vis.size === zz.size;
+}
+
+/** Compara tuplas de números elemento por elemento (como Python). */
+function menorTupla(a, b) {
+  for (let k = 0; k < a.length; k++) { if (a[k] < b[k]) return true; if (a[k] > b[k]) return false; }
+  return false;
+}
+
+function zonas(M, us, X) {
   const cnt = new Map(), suma = new Map();
   for (let i = 0; i < us.length; i++) {
     const b = us[i];
@@ -383,104 +435,107 @@ function zonas(M, us, X, tierra) {
     cnt.set(b, cnt.get(b) + 1); suma.get(b).push(X[i]);
   }
   const ub = [...cnt.keys()].sort((a, b) => a - b);
+  const cntOrd = new Map(ub.map(b => [b, cnt.get(b)]));   // mismo orden que el dict de Python
   const cen = new Map(ub.map(b => [b, media(suma.get(b))]));
   const C = b => cnt.get(b);
+  const dist = (p, c) => hyp(p[0] - c[0], p[1] - c[1]);
+  const V = vecinasHoy(M, cntOrd);
   const zs = []; const hecho = new Set();
-  for (const b of ub) {                        // 1) núcleos
+  for (const b of ub) {                        // 1) núcleos: sus dos mitades juntas si suman <= 100
     if (M.esNucleo[b] && !hecho.has(b)) {
       const p = M.pareja[b]; hecho.add(b); hecho.add(p);
       if (cnt.has(p) && C(b) + C(p) <= PAR_NUCLEO) zs.push([b, p]);
       else { zs.push([b]); if (cnt.has(p)) zs.push([p]); }
     }
   }
+  const zonaDe = new Map();
+  zs.forEach((z, i) => z.forEach(u => zonaDe.set(u, i)));
   const carga = zs.map(z => z.reduce((s, u) => s + C(u), 0));
-  const cz = zs.map(z => media(z.map(u => cen.get(u))));
-  const dist = (p, c) => hyp(p[0] - c[0], p[1] - c[1]);
-  let sats = ub.filter(b => !M.esNucleo[b]);
-  if (zs.length) {
-    const key = new Map(sats.map(s => [s, Math.min(...cz.map(c => dist(cen.get(s), c)))]));
-    sats = sats.map((s, i) => [s, i]).sort((a, b) => (key.get(a[0]) - key.get(b[0])) || (a[1] - b[1])).map(a => a[0]);
-  }
-  const sueltos = [];
-  for (const s of sats) {                      // 2) satélites al núcleo más cercano a <= 4 km, por tierra, si cabe
+  const cz = zs.map(z => media(z.map(u => cen.get(u))));      // centro fijo: no se recalcula al crecer
+  // 2) los núcleos crecen hacia sus satélites VECINOS: entra la menor tupla (distancia, i, s)
+  for (;;) {
     let mejor = null;
-    cz.forEach((c, i) => {
-      const d = dist(cen.get(s), c);
-      if (d <= RADIO_KM && carga[i] + C(s) <= TOPE_ZONA && (mejor === null || d < mejor[0]) && porTierra(s, zs[i])) mejor = [d, i];
-    });
-    if (mejor) { zs[mejor[1]].push(s); carga[mejor[1]] += C(s); }
-    else sueltos.push(s);
-  }
-  if (sueltos.length) {                        // 3) satélites sueltos: zonas compactas y por tierra
-    const Cs = sueltos.map(u => cen.get(u)), w = sueltos.map(u => C(u));
-    const total = w.reduce((a, b) => a + b, 0);
-    // pila: se saca siempre el último; los pedazos se agregan al final, en el orden de wbis
-    const pend = wbis(sueltos.map((_, i) => i), Cs, w, Math.max(1, Math.ceil(total / META_ZONA)));
-    while (pend.length) {
-      const g = pend.pop(), ids = g.map(v => sueltos[v]);
-      const ok = diametro(ids, cen) <= DMAX_ZONA_KM && ids.every(a => ids.every(c => tierra[a][c] === '1'));
-      if (ok || g.length <= 1) zs.push(ids);
-      else pend.push(...wbis(g, Cs, w, 2));
+    for (let i = 0; i < zs.length; i++) {
+      for (const u of zs[i]) {
+        for (const s of V.get(u)) {
+          if (zonaDe.has(s) || M.esNucleo[s]) continue;
+          const d = dist(cen.get(s), cz[i]);
+          if (d <= RADIO_KM && carga[i] + C(s) <= TOPE_ZONA && (mejor === null || menorTupla([d, i, s], mejor))) mejor = [d, i, s];
+        }
+      }
     }
+    if (mejor === null) break;
+    const [, i, s] = mejor;
+    zs[i].push(s); zonaDe.set(s, i); carga[i] += C(s);
   }
-  for (let vuelta = 0; vuelta < 300; vuelta++) { // 4) ajuste de borde
+  // 3) satélites que no alcanzó ningún núcleo: zonas que crecen desde la bolsa con más pedidos
+  let resto = ub.filter(b => !zonaDe.has(b));
+  while (resto.length) {
+    let semilla = resto[0];
+    for (const b of resto) if (C(b) > C(semilla) || (C(b) === C(semilla) && b < semilla)) semilla = b;
+    const z = [semilla]; let c = C(semilla); const c0 = cen.get(semilla);
+    zonaDe.set(semilla, zs.length);
+    while (c < META_ZONA) {
+      const set = new Set();
+      for (const u of z) for (const s of V.get(u)) if (!zonaDe.has(s)) set.add(s);
+      const cand = [...set]
+        .map(s => [dist(cen.get(s), c0), s])
+        .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]))
+        .map(a => a[1])
+        .filter(s => c + C(s) <= TOPE_ZONA && diametro([...z, s], cen) <= DMAX_ZONA_KM);
+      if (!cand.length) break;
+      const s = cand[0];
+      z.push(s); zonaDe.set(s, zs.length); c += C(s);
+    }
+    zs.push(z);
+    resto = resto.filter(b => !zonaDe.has(b));
+  }
+  // 4) ajuste de borde: un satélite pasa a una zona VECINA si eso acerca ambas a rutas de 40 a 55
+  //    y la zona de origen sigue siendo continua
+  for (let vuelta = 0; vuelta < 300; vuelta++) {
     const T = zs.map(z => z.reduce((s, u) => s + C(u), 0));
     let mejor = null;
     for (let i = 0; i < zs.length; i++) {
       const z = zs[i];
       for (const s of z) {
         if (M.esNucleo[s] || z.length === 1) continue;
-        for (let j = 0; j < zs.length; j++) {
-          if (j === i) continue;
-          let d = Infinity;
-          for (const u2 of zs[j]) { const dd = dist(cen.get(s), cen.get(u2)); if (dd < d) d = dd; }
-          if (d > ALCANCE_AJUSTE_KM) continue;
-          if (!zs[j].some(u => M.esNucleo[u]) && diametro([...zs[j], s], cen) > DMAX_ZONA_KM) continue;
-          if (!porTierra(s, zs[j])) continue;
+        const js = [...new Set([...V.get(s)].map(v => zonaDe.get(v)))].filter(j => j !== i).sort((a, b) => a - b);
+        for (const j of js) {
+          const z2 = zs[j];
+          if (!z2.some(u => M.esNucleo[u]) && diametro([...z2, s], cen) > DMAX_ZONA_KM) continue;
           const g = desvio(T[i]) + desvio(T[j]) - desvio(T[i] - C(s)) - desvio(T[j] + C(s));
-          if (g > 0.5 && (mejor === null || g > mejor[0])) mejor = [g, i, j, s];
+          if (g > 0.5 && (mejor === null || g > mejor[0]) && continua(z.filter(u => u !== s), V)) mejor = [g, i, j, s];
         }
       }
     }
     if (mejor === null) break;
     const [, i, j, s] = mejor;
-    zs[i].splice(zs[i].indexOf(s), 1); zs[j].push(s);
+    zs[i].splice(zs[i].indexOf(s), 1); zs[j].push(s); zonaDe.set(s, j);
   }
-  return zs;
+  return zs.filter(z => z.length);
 }
 
-// ---------------- 5b. matriz ola x turno y rutas ----------------
-/** Todas las rutas del día repartidas entre los 3 turnos. */
-function propuesta(M, D, X, us, tierra) {
+// ---------------- 5b. rutas por territorio y reparto entre los 3 turnos ----------------
+/** Cada zona se corta en k rutas compactas; a la Ruta 1 van las que tienen más pedidos ya en el hub. */
+function propuesta(M, D, X, us) {
   const idx = Array.from({ length: D.n }, (_, i) => i);
   const ola = D.ola;
-  const zs = zonas(M, idx.map(i => us[i]), idx.map(i => X[i]), tierra);
+  const zs = zonas(M, us, X);
   const rutas = []; let rot = 0;
   zs.forEach((z, zi) => {
     const zset = new Set(z);
-    const miembros = idx.filter(i => zset.has(us[i]));
+    const miembros = idx.filter(i => zset.has(us[i]));     // en orden de índice del archivo
     const T = miembros.length;
     if (T === 0) return;
     const k = kRutas(T), base = [Math.floor(k / 3), Math.floor(k / 3), Math.floor(k / 3)];
     for (let e = 0; e < k % 3; e++) base[(rot + e) % 3]++;
     rot += k % 3;                              // contador global entre zonas
-    const temprano = miembros.filter(i => ola[i] < 3);
-    const c = media((temprano.length ? temprano : miembros).map(i => X[i]));
-    const dist = miembros.map(i => hyp(X[i][0] - c[0], X[i][1] - c[1]));
-    // lexsort((dist, ola)): por ola, luego por distancia, luego por posición original
-    const m = miembros.map((_, j) => j)
-      .sort((a, b) => (ola[miembros[a]] - ola[miembros[b]]) || (dist[a] - dist[b]) || (a - b))
-      .map(j => miembros[j]);
-    let pos = 0;
-    let ultimo = 0; for (const t of [1, 2, 3]) if (base[t - 1] > 0) ultimo = t;   // el último turno con rutas toma lo que queda
-    for (const t of [1, 2, 3]) {
-      if (base[t - 1] === 0) continue;
-      let n = t < ultimo ? roundHalfEven(T * base[t - 1] / k) : T - pos;
-      n = Math.min(n, T - pos);
-      const sub = m.slice(pos, pos + n); pos += n;
-      if (!sub.length) continue;
-      for (const r of splitGeo(sub, X, base[t - 1])) rutas.push({ turno: t, zona: zi, idx: r });
-    }
+    const trozos = splitGeo(miembros, X, k);
+    // −fracción de pedidos de las olas 1 y 2 (más pedidos ya en el hub primero); empate: posición
+    const temprano = trozos.map(r => -(r.filter(i => ola[i] < 3).length / r.length));
+    const orden = trozos.map((_, n) => n).sort((a, b) => (temprano[a] - temprano[b]) || (a - b));
+    const turnoDe = [...Array(base[0]).fill(1), ...Array(base[1]).fill(2), ...Array(base[2]).fill(3)];
+    orden.forEach((n, pos) => rutas.push({ turno: turnoDe[pos], zona: zi, idx: trozos[n] }));
   });
   return { zs, rutas };
 }
@@ -553,18 +608,15 @@ const ahora = () => (typeof performance !== 'undefined' ? performance.now() : Da
 
 /**
  * Corrida completa de la noche. filas: arreglo de objetos (una fila por pedido). B: datos/bolsas.json.
- * conexion: datos/conexion_bolsas.json (qué pares de bolsas se conectan por tierra).
  * Devuelve { resumen (mismas claves que resultados_esperados.json), y el detalle para dibujar }.
  */
-export function sectorizar(filas, B, archivo = '', conexion = null) {
-  const tierra = conexion && conexion.tierra;
-  if (!tierra || tierra.length !== B.bolsas.length) throw new Error('Falta datos/conexion_bolsas.json');
+export function sectorizar(filas, B, archivo = '') {
   const t0 = ahora();
   const M = prepararMalla(B);
   const D = leer(filas, B);
   const { X, us } = bolsasDe(M, D);
   const hoy = reglaActual(D);
-  const { zs, rutas: prop } = propuesta(M, D, X, us, tierra);
+  const { zs, rutas: prop } = propuesta(M, D, X, us);
   const mHoy = metricas(hoy, X, D), mProp = metricas(prop, X, D);
   const segundos = (ahora() - t0) / 1000;
 
