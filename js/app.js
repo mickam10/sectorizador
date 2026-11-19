@@ -182,14 +182,21 @@ function pintarUbicaciones(R) {
   }
   const maxT = Math.max(1, ...[0, 1, 2].flatMap(t => U.map((_, b) => hub[t][b] + falta[t][b])));
   const { col, zonaDeBolsa } = coloresZonas(R);
-  const orden = U.map(u => u.id).sort((a, b) => U[a].ubicacion - U[b].ubicacion);
+  // primero las ubicaciones con pedidos hoy (por número de ubicación); al final las vacías, atenuadas
+  const totalDe = b => [0, 1, 2].reduce((s, t) => s + hub[t][b] + falta[t][b], 0);
+  const porUbic = U.map(u => u.id).sort((a, b) => U[a].ubicacion - U[b].ubicacion);
+  const conPedidos = porUbic.filter(b => totalDe(b) > 0), vacias = porUbic.filter(b => totalDe(b) === 0);
+  const orden = [...conPedidos, ...vacias];
+  $('conteo-ubicaciones').textContent = `${fmt(U.length)} ubicaciones · ${fmt(conPedidos.length)} con pedidos hoy` + (vacias.length ? ` · ${fmt(vacias.length)} vacías al final` : '');
   const barra = (t, b) => `<div class="barra-r1" title="Ruta ${t + 1}"><span class="hub" style="width:${hub[t][b] / maxT * 100}%"></span><span class="falta" style="width:${falta[t][b] / maxT * 100}%"></span></div>`;
   $('ubicaciones').innerHTML = orden.map(b => {
     const u = U[b], zi = zonaDeBolsa.get(b);
     const total = [0, 1, 2].reduce((s, t) => s + hub[t][b] + falta[t][b], 0);
     const color = zi === undefined ? '#c9d1da' : PALETA_ZONAS[col[zi]];
-    return `<div class="ubic${total === 0 ? ' vacia' : ''}" data-bolsa="${b}" style="--zona:${color}">
-      <div class="cab"><span class="cod">${esc(u.code)}</span><span class="num">Ubicación ${String(u.ubicacion).padStart(2, '0')}</span></div>
+    const cab = `<div class="cab"><span class="cod">${esc(u.code)}</span><span class="num">Ubicación ${u.ubicacion}</span></div>`;
+    if (total === 0) return `<div class="ubic vacia" data-bolsa="${b}" style="--zona:${color}">${cab}<span class="r2">Sin pedidos hoy</span></div>`;
+    return `<div class="ubic" data-bolsa="${b}" style="--zona:${color}">
+      ${cab}
       ${barra(0, b)}
       <span class="r1">R1: <b>${hub[0][b]}</b> en el hub · <b>${falta[0][b]}</b> por llegar</span>
       ${barra(1, b)}
