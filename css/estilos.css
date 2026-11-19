@@ -196,6 +196,7 @@ button:focus-visible { outline: 3px solid #6c9bd0; outline-offset: 2px; }
 .metricas thead th.prop { color: var(--marino); }
 .metricas td { font-variant-numeric: tabular-nums; }
 .metricas .nota { display: block; font-size: 12px; font-weight: 500; color: var(--texto-suave); }
+.metricas .reparto { white-space: nowrap; font-size: 13px; }
 
 .pestanas { display: flex; border-bottom: 2px solid var(--borde); gap: 4px; }
 .pestanas button {

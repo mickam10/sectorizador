@@ -158,7 +158,7 @@ async function mostrarResultado(R) {
 
 function pintarMetricas(r) {
   const A = r.regla_actual, P = r.propuesta;
-  const reparto = m => `<span class="nota">R1 ${fmt(m.ruta1)} · R2 ${fmt(m.ruta2)} · R3 ${fmt(m.ruta3)}</span>`;
+  const reparto = m => `<span class="nota reparto">${fmt(m.ruta1)} · ${fmt(m.ruta2)} · ${fmt(m.ruta3)}</span>`;
   const filas = [
     ['Rutas<span class="nota">Ruta 1 · Ruta 2 · Ruta 3</span>', fmt(A.rutas) + reparto(A), fmt(P.rutas) + reparto(P)],
     ['Paradas por ruta', A.paradas_prom.toFixed(1), P.paradas_prom.toFixed(1)],
