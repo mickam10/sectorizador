@@ -13,6 +13,9 @@ const estado = { bolsas: null, filas: null, archivo: '', resultado: null };
 const cargaBolsas = fetch('datos/bolsas.json')
   .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
   .then(b => { estado.bolsas = b; return b; });
+const cargaConexion = fetch('datos/conexion_bolsas.json')      // qué pares de bolsas se conectan por tierra
+  .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+  .then(c => { estado.conexion = c; return c; });
 
 // ---------------- pantallas ----------------
 function mostrar(nombre) {
@@ -62,7 +65,7 @@ async function leerArchivo(archivo) {
     return mostrarError(e instanceof ErrorUsuario ? e.message : MSG_ILEGIBLE);
   }
   let bolsas;
-  try { bolsas = await cargaBolsas; }
+  try { bolsas = await cargaBolsas; await cargaConexion; }
   catch (e) { return mostrarError('No se pudo cargar el mapa de bolsas. Revisa la conexión y recarga la página.'); }
   try {
     const D = leer(filas, bolsas);         // valida y cuenta olas
@@ -94,7 +97,8 @@ window.addEventListener('drop', e => e.preventDefault());
 
 // ---------------- 2. sectorizar ----------------
 const espera = ms => new Promise(r => setTimeout(r, ms));
-const pintado = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+// espera a que la pantalla se dibuje; si Chrome no dibuja (ventana minimizada), sigue igual a los 150 ms
+const pintado = () => new Promise(r => { requestAnimationFrame(() => setTimeout(r, 0)); setTimeout(r, 150); });
 
 $('boton-sectorizar').addEventListener('click', async () => {
   if (!estado.filas) return;
@@ -106,7 +110,7 @@ $('boton-sectorizar').addEventListener('click', async () => {
 
   let R;
   try {
-    R = sectorizar(estado.filas, estado.bolsas, estado.archivo);
+    R = sectorizar(estado.filas, estado.bolsas, estado.archivo, estado.conexion);
   } catch (e) {
     if (!(e instanceof ErrorUsuario)) console.error(e);
     mostrar('cargar');
@@ -154,8 +158,9 @@ async function mostrarResultado(R) {
 
 function pintarMetricas(r) {
   const A = r.regla_actual, P = r.propuesta;
+  const reparto = m => `<span class="nota">R1 ${fmt(m.ruta1)} · R2 ${fmt(m.ruta2)} · R3 ${fmt(m.ruta3)}</span>`;
   const filas = [
-    ['Rutas', fmt(A.rutas), fmt(P.rutas)],
+    ['Rutas<span class="nota">Ruta 1 · Ruta 2 · Ruta 3</span>', fmt(A.rutas) + reparto(A), fmt(P.rutas) + reparto(P)],
     ['Paradas por ruta', A.paradas_prom.toFixed(1), P.paradas_prom.toFixed(1)],
     ['Rutas desparejas<span class="nota">menos de 40 o más de 55</span>', A.desparejas_pct + ' %', P.desparejas_pct + ' %'],
     ['Km recorridos<span class="nota">en línea recta</span>', fmt(A.km), fmt(P.km)],
@@ -169,22 +174,28 @@ function pintarUbicaciones(R) {
   const r = R.resumen;
   $('resumen-r1').textContent = `Ruta 1: ${fmt(r.ruta1_pedidos)} pedidos · ${r.ruta1_ya_en_hub_pct} % ya está en el hub antes de la ola de las 02:30`;
   const U = R.malla.U, nb = U.length;
-  const hub = new Array(nb).fill(0), falta = new Array(nb).fill(0), r2 = new Array(nb).fill(0);
+  // por bolsa y turno: lo que ya está en el hub (olas 1 y 2) y lo que falta (ola 3)
+  const hub = [1, 2, 3].map(() => new Array(nb).fill(0)), falta = [1, 2, 3].map(() => new Array(nb).fill(0));
   for (const ru of R.rutasPropuesta) for (const i of ru.idx) {
-    const b = R.us[i];
-    if (ru.turno === 1) { if (R.datos.ola[i] === 3) falta[b]++; else hub[b]++; } else r2[b]++;
+    const b = R.us[i], t = ru.turno - 1;
+    if (R.datos.ola[i] === 3) falta[t][b]++; else hub[t][b]++;
   }
-  const maxR1 = Math.max(1, ...U.map((_, b) => hub[b] + falta[b]));
+  const maxT = Math.max(1, ...[0, 1, 2].flatMap(t => U.map((_, b) => hub[t][b] + falta[t][b])));
   const { col, zonaDeBolsa } = coloresZonas(R);
   const orden = U.map(u => u.id).sort((a, b) => U[a].ubicacion - U[b].ubicacion);
+  const barra = (t, b) => `<div class="barra-r1" title="Ruta ${t + 1}"><span class="hub" style="width:${hub[t][b] / maxT * 100}%"></span><span class="falta" style="width:${falta[t][b] / maxT * 100}%"></span></div>`;
   $('ubicaciones').innerHTML = orden.map(b => {
-    const u = U[b], zi = zonaDeBolsa.get(b), t1 = hub[b] + falta[b];
+    const u = U[b], zi = zonaDeBolsa.get(b);
+    const total = [0, 1, 2].reduce((s, t) => s + hub[t][b] + falta[t][b], 0);
     const color = zi === undefined ? '#c9d1da' : PALETA_ZONAS[col[zi]];
-    return `<div class="ubic${t1 + r2[b] === 0 ? ' vacia' : ''}" data-bolsa="${b}" style="--zona:${color}">
+    return `<div class="ubic${total === 0 ? ' vacia' : ''}" data-bolsa="${b}" style="--zona:${color}">
       <div class="cab"><span class="cod">${esc(u.code)}</span><span class="num">Ubicación ${String(u.ubicacion).padStart(2, '0')}</span></div>
-      <div class="barra-r1" title="Ruta 1"><span class="hub" style="width:${hub[b] / maxR1 * 100}%"></span><span class="falta" style="width:${falta[b] / maxR1 * 100}%"></span></div>
-      <span class="r1">R1: <b>${hub[b]}</b> en el hub · <b>${falta[b]}</b> por llegar</span>
-      <span class="r2">R2: ${r2[b]} pedidos</span>
+      ${barra(0, b)}
+      <span class="r1">R1: <b>${hub[0][b]}</b> en el hub · <b>${falta[0][b]}</b> por llegar</span>
+      ${barra(1, b)}
+      <span class="r2">R2: <b>${hub[1][b]}</b> en el hub · <b>${falta[1][b]}</b> por llegar</span>
+      ${barra(2, b)}
+      <span class="r2">R3: <b>${hub[2][b]}</b> en el hub · <b>${falta[2][b]}</b> por llegar</span>
     </div>`;
   }).join('');
 }

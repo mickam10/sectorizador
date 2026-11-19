@@ -9,6 +9,7 @@
 !/datos/
 /datos/*
 !/datos/bolsas.json
+!/datos/conexion_bolsas.json
 !/datos/mapas/
 /datos/mapas/*
 !/datos/mapas/distritos_simplificado.geojson

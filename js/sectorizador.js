@@ -10,6 +10,7 @@ export const TOPE_ZONA = 108;
 export const META_ZONA = 100;
 export const RADIO_KM = 4.0;
 export const ALCANCE_AJUSTE_KM = 3.0;
+export const DMAX_ZONA_KM = 10.0;
 export const CUOTA_OLAS = [0.15, 0.25, 0.60];
 export const VEL_HUB = 700;
 export const FRANJAS = { 1: '06:00 a 11:00', 2: '12:00 a 17:00', 3: '18:00 a 21:00' };
@@ -362,7 +363,19 @@ function media(pts) {
 }
 
 // ---------------- 5a. zonas de la noche ----------------
-function zonas(M, us, X) {
+/** Distancia máxima entre los centroides de un grupo de bolsas (km). */
+function diametro(ids, cen) {
+  let d = 0;
+  for (let a = 0; a < ids.length; a++) for (let b = 0; b < ids.length; b++) {
+    const p = cen.get(ids[a]), q = cen.get(ids[b]);
+    const v = hyp(p[0] - q[0], p[1] - q[1]);
+    if (v > d) d = v;
+  }
+  return d;
+}
+
+function zonas(M, us, X, tierra) {
+  const porTierra = (a, ids) => ids.every(u => tierra[a][u] === '1');
   const cnt = new Map(), suma = new Map();
   for (let i = 0; i < us.length; i++) {
     const b = us[i];
@@ -389,20 +402,26 @@ function zonas(M, us, X) {
     sats = sats.map((s, i) => [s, i]).sort((a, b) => (key.get(a[0]) - key.get(b[0])) || (a[1] - b[1])).map(a => a[0]);
   }
   const sueltos = [];
-  for (const s of sats) {                      // 2) satélites al núcleo más cercano
+  for (const s of sats) {                      // 2) satélites al núcleo más cercano a <= 4 km, por tierra, si cabe
     let mejor = null;
     cz.forEach((c, i) => {
       const d = dist(cen.get(s), c);
-      if (d <= RADIO_KM && carga[i] + C(s) <= TOPE_ZONA && (mejor === null || d < mejor[0])) mejor = [d, i];
+      if (d <= RADIO_KM && carga[i] + C(s) <= TOPE_ZONA && (mejor === null || d < mejor[0]) && porTierra(s, zs[i])) mejor = [d, i];
     });
     if (mejor) { zs[mejor[1]].push(s); carga[mejor[1]] += C(s); }
     else sueltos.push(s);
   }
-  if (sueltos.length) {                        // 3) satélites sueltos entre vecinos
+  if (sueltos.length) {                        // 3) satélites sueltos: zonas compactas y por tierra
     const Cs = sueltos.map(u => cen.get(u)), w = sueltos.map(u => C(u));
     const total = w.reduce((a, b) => a + b, 0);
-    const grupos = wbis(sueltos.map((_, i) => i), Cs, w, Math.max(1, Math.ceil(total / META_ZONA)));
-    for (const g of grupos) zs.push(g.map(i => sueltos[i]));
+    // pila: se saca siempre el último; los pedazos se agregan al final, en el orden de wbis
+    const pend = wbis(sueltos.map((_, i) => i), Cs, w, Math.max(1, Math.ceil(total / META_ZONA)));
+    while (pend.length) {
+      const g = pend.pop(), ids = g.map(v => sueltos[v]);
+      const ok = diametro(ids, cen) <= DMAX_ZONA_KM && ids.every(a => ids.every(c => tierra[a][c] === '1'));
+      if (ok || g.length <= 1) zs.push(ids);
+      else pend.push(...wbis(g, Cs, w, 2));
+    }
   }
   for (let vuelta = 0; vuelta < 300; vuelta++) { // 4) ajuste de borde
     const T = zs.map(z => z.reduce((s, u) => s + C(u), 0));
@@ -416,6 +435,8 @@ function zonas(M, us, X) {
           let d = Infinity;
           for (const u2 of zs[j]) { const dd = dist(cen.get(s), cen.get(u2)); if (dd < d) d = dd; }
           if (d > ALCANCE_AJUSTE_KM) continue;
+          if (!zs[j].some(u => M.esNucleo[u]) && diametro([...zs[j], s], cen) > DMAX_ZONA_KM) continue;
+          if (!porTierra(s, zs[j])) continue;
           const g = desvio(T[i]) + desvio(T[j]) - desvio(T[i] - C(s)) - desvio(T[j] + C(s));
           if (g > 0.5 && (mejor === null || g > mejor[0])) mejor = [g, i, j, s];
         }
@@ -429,40 +450,44 @@ function zonas(M, us, X) {
 }
 
 // ---------------- 5b. matriz ola x turno y rutas ----------------
-function propuesta(M, D, X, us) {
-  const idx = [];
-  for (let i = 0; i < D.n; i++) if (D.turno[i] < 3) idx.push(i);
+/** Todas las rutas del día repartidas entre los 3 turnos. */
+function propuesta(M, D, X, us, tierra) {
+  const idx = Array.from({ length: D.n }, (_, i) => i);
   const ola = D.ola;
-  const zs = zonas(M, idx.map(i => us[i]), idx.map(i => X[i]));
-  const rutas = []; let flip = 0;
+  const zs = zonas(M, idx.map(i => us[i]), idx.map(i => X[i]), tierra);
+  const rutas = []; let rot = 0;
   zs.forEach((z, zi) => {
     const zset = new Set(z);
     const miembros = idx.filter(i => zset.has(us[i]));
     const T = miembros.length;
     if (T === 0) return;
-    const k = kRutas(T); let n1 = Math.floor(k / 2), n2 = k - n1;
-    if (k % 2 === 1) {
-      if (flip % 2 === 0) [n1, n2] = [n2, n1];
-      flip++;
-    }
-    const t1 = roundHalfEven(T * n1 / k);
+    const k = kRutas(T), base = [Math.floor(k / 3), Math.floor(k / 3), Math.floor(k / 3)];
+    for (let e = 0; e < k % 3; e++) base[(rot + e) % 3]++;
+    rot += k % 3;                              // contador global entre zonas
     const temprano = miembros.filter(i => ola[i] < 3);
     const c = media((temprano.length ? temprano : miembros).map(i => X[i]));
     const dist = miembros.map(i => hyp(X[i][0] - c[0], X[i][1] - c[1]));
-    const o = miembros.map((_, j) => j).sort((a, b) => {
-      const ta = ola[miembros[a]] === 3 ? 1 : 0, tb = ola[miembros[b]] === 3 ? 1 : 0;
-      return (ta - tb) || (dist[a] - dist[b]) || (a - b);
-    });
-    const A = o.slice(0, t1).map(j => miembros[j]), Bm = o.slice(t1).map(j => miembros[j]);
-    if (n1) for (const r of splitGeo(A, X, n1)) rutas.push({ turno: 1, zona: zi, idx: r });
-    if (n2) for (const r of splitGeo(Bm, X, n2)) rutas.push({ turno: 2, zona: zi, idx: r });
+    // lexsort((dist, ola)): por ola, luego por distancia, luego por posición original
+    const m = miembros.map((_, j) => j)
+      .sort((a, b) => (ola[miembros[a]] - ola[miembros[b]]) || (dist[a] - dist[b]) || (a - b))
+      .map(j => miembros[j]);
+    let pos = 0;
+    let ultimo = 0; for (const t of [1, 2, 3]) if (base[t - 1] > 0) ultimo = t;   // el último turno con rutas toma lo que queda
+    for (const t of [1, 2, 3]) {
+      if (base[t - 1] === 0) continue;
+      let n = t < ultimo ? roundHalfEven(T * base[t - 1] / k) : T - pos;
+      n = Math.min(n, T - pos);
+      const sub = m.slice(pos, pos + n); pos += n;
+      if (!sub.length) continue;
+      for (const r of splitGeo(sub, X, base[t - 1])) rutas.push({ turno: t, zona: zi, idx: r });
+    }
   });
   return { zs, rutas };
 }
 
 function reglaActual(D) {
   const rutas = [];
-  for (const turno of [1, 2]) {
+  for (const turno of [1, 2, 3]) {
     const grupos = new Map();
     for (let i = 0; i < D.n; i++) {
       if (D.turno[i] !== turno) continue;
@@ -502,13 +527,14 @@ function metricas(rutas, X, D) {
     });
     for (const v of rutaDe.values()) if (v.size > 1) dobles++;
   }
-  if (!tam.length) return { rutas: 0, ruta1: 0, ruta2: 0, paradas_prom: 0, min: 0, max: 0, desparejas_pct: 0, km: 0, direcciones_con_2_motos: dobles };
+  if (!tam.length) return { rutas: 0, ruta1: 0, ruta2: 0, ruta3: 0, paradas_prom: 0, min: 0, max: 0, desparejas_pct: 0, km: 0, direcciones_con_2_motos: dobles };
   const total = tam.reduce((a, b) => a + b, 0);
   const desp = tam.filter(t => t < MIN_P || t > MAX_P).length;
   return {
     rutas: rutas.length,
     ruta1: rutas.filter(r => r.turno === 1).length,
     ruta2: rutas.filter(r => r.turno === 2).length,
+    ruta3: rutas.filter(r => r.turno === 3).length,
     paradas_prom: roundRatio(total, tam.length, 1),
     min: Math.min(...tam), max: Math.max(...tam),
     desparejas_pct: roundHalfEven(desp / tam.length * 100),
@@ -527,15 +553,18 @@ const ahora = () => (typeof performance !== 'undefined' ? performance.now() : Da
 
 /**
  * Corrida completa de la noche. filas: arreglo de objetos (una fila por pedido). B: datos/bolsas.json.
+ * conexion: datos/conexion_bolsas.json (qué pares de bolsas se conectan por tierra).
  * Devuelve { resumen (mismas claves que resultados_esperados.json), y el detalle para dibujar }.
  */
-export function sectorizar(filas, B, archivo = '') {
+export function sectorizar(filas, B, archivo = '', conexion = null) {
+  const tierra = conexion && conexion.tierra;
+  if (!tierra || tierra.length !== B.bolsas.length) throw new Error('Falta datos/conexion_bolsas.json');
   const t0 = ahora();
   const M = prepararMalla(B);
   const D = leer(filas, B);
   const { X, us } = bolsasDe(M, D);
   const hoy = reglaActual(D);
-  const { zs, rutas: prop } = propuesta(M, D, X, us);
+  const { zs, rutas: prop } = propuesta(M, D, X, us, tierra);
   const mHoy = metricas(hoy, X, D), mProp = metricas(prop, X, D);
   const segundos = (ahora() - t0) / 1000;
 
@@ -545,7 +574,7 @@ export function sectorizar(filas, B, archivo = '') {
   let ola3 = 0; for (const o of ola) if (o === 3) ola3++;
   const resumen = {
     archivo, pedidos: D.n,
-    ruta3_sin_cambios: D.turno.filter(t => t === 3).length,
+    pedidos_turno3_hoy: D.turno.filter(t => t === 3).length,
     olas: [1, 2, 3].map(k => ola.filter(o => o === k).length),
     zonas: zs.length,
     regla_actual: mHoy, propuesta: mProp,
@@ -562,7 +591,7 @@ export function sectorizar(filas, B, archivo = '') {
   prop.forEach((r, k) => {
     r.orden.forEach((j, p) => { const i = r.idx[j]; zona[i] = r.zona + 1; turno[i] = r.turno; ruta[i] = k + 1; pos[i] = p + 1; });
   });
-  const aviso = turno.map((t, i) => (ola[i] < 3 && Math.trunc(t) === 2 && zona[i] !== null) ? 'Queda para la Ruta 2' : '');
+  const aviso = turno.map((t, i) => (ola[i] < 3 && Math.trunc(t) > 1 && zona[i] !== null) ? 'Queda para la Ruta ' + Math.trunc(t) : '');
   // ruta de cada pedido en la regla actual
   const rutaHoy = new Array(D.n).fill(null);
   hoy.forEach((r, k) => { for (const i of r.idx) rutaHoy[i] = k; });
