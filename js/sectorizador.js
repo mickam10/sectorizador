@@ -13,6 +13,8 @@ export const ALCANCE_AJUSTE_KM = 3.0;
 export const DMAX_ZONA_KM = 14.0;     // por calle
 export const DESVIO_RATIO = 2.0;      // rodeo: por calle más del doble de la línea recta...
 export const DESVIO_EXTRA_KM = 3.0;   // ...y más de 3 km extra => las bolsas no son vecinas
+export const ZONA_CHICA = 20;         // una zona con menos de 20 pedidos no justifica una moto sola...
+export const ALCANCE_CHICA_KM = 6.0;  // ...y se suma entera a la zona más cercana a <= 6 km por calle
 export const SALTO_VACIO_KM = 3.0;   // una bolsa sin pedidos hoy no corta la vecindad: se atraviesa hasta 3 km
 export const CUOTA_OLAS = [0.15, 0.25, 0.60];
 export const VEL_HUB = 700;
@@ -460,7 +462,7 @@ function zonas(M, us, X) {
   const C = b => cnt.get(b);
   const dist = (p, c) => hyp(p[0] - c[0], p[1] - c[1]);
   const V = vecinasHoy(M, cntOrd);
-  const zs = []; const hecho = new Set();
+  let zs = []; const hecho = new Set();
   for (const b of ub) {                        // 1) núcleos: sus dos mitades juntas si suman <= 100
     if (M.esNucleo[b] && !hecho.has(b)) {
       const p = M.pareja[b]; hecho.add(b); hecho.add(p);
@@ -533,7 +535,34 @@ function zonas(M, us, X) {
     const [, i, j, s] = mejor;
     zs[i].splice(zs[i].indexOf(s), 1); zs[j].push(s); zonaDe.set(s, j);
   }
-  return zs.filter(z => z.length);
+  zs = zs.filter(z => z.length);
+  // 5) zonas chicas: una zona con menos de ZONA_CHICA pedidos se suma ENTERA a la zona más cercana por calle
+  //    (<= 6 km), sin cruzar el Rímac, sin pasar de 108 pedidos ni de 14 km por calle. Aquí NO se usa el rodeo.
+  const cruzaRio = (zi, zj) => zi.some(a => zj.some(b => M.ladoRio[a] && M.ladoRio[b] && M.ladoRio[a] !== M.ladoRio[b]));
+  for (;;) {
+    const T = zs.map(z => z.reduce((s, u) => s + C(u), 0));
+    let hecho = false;
+    const porTamano = zs.map((_, i) => i).sort((a, b) => (T[a] - T[b]) || (a - b));   // de menor a mayor (empate: índice)
+    for (const i of porTamano) {
+      if (T[i] >= ZONA_CHICA) break;
+      let mejor = null;                                   // menor tupla (distancia por calle mínima, j)
+      for (let j = 0; j < zs.length; j++) {
+        if (j === i || T[i] + T[j] > TOPE_ZONA) continue;
+        let d = Infinity;
+        for (const a of zs[i]) for (const b of zs[j]) if (M.calle[a][b] < d) d = M.calle[a][b];
+        if (d > ALCANCE_CHICA_KM) continue;
+        if (cruzaRio(zs[i], zs[j])) continue;
+        if (diametro(M, [...zs[i], ...zs[j]]) > DMAX_ZONA_KM) continue;
+        if (mejor === null || menorTupla([d, j], mejor)) mejor = [d, j];
+      }
+      if (mejor) {
+        const j = mejor[1];
+        zs[j] = [...zs[j], ...zs[i]]; zs.splice(i, 1); hecho = true; break;
+      }
+    }
+    if (!hecho) break;
+  }
+  return zs;
 }
 
 // ---------------- 5b. rutas por territorio y reparto entre los 3 turnos ----------------
